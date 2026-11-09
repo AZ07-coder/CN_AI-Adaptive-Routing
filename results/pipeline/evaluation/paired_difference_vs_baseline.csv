@@ -1,0 +1,7 @@
+traffic_level,mode,udp_throughput_mbps,udp_loss_pct,udp_delay_ms,udp_jitter_ms,tcp_throughput_mbps,cross_loss_pct,network_delivery_pct
+high,adaptive_ml,2.82,-14.825,-1575.988,1228.602,0.0,5.904,5.546
+high,adaptive_rule,2.82,-14.825,-1575.988,1228.602,0.0,5.904,5.546
+low,adaptive_ml,0.023,-0.666,-22.819,2.796,0.0,-2.632,1.353
+low,adaptive_rule,0.023,-0.666,-22.819,2.796,0.0,-2.632,1.353
+medium,adaptive_ml,2.259,-22.535,-597.543,368.355,0.0,-1.323,7.252
+medium,adaptive_rule,2.259,-22.535,-597.543,368.355,0.0,-1.323,7.252

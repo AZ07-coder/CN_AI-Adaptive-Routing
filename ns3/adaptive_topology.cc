@@ -1,624 +1,656 @@
-#include "ns3/core-module.h"
-#include "ns3/network-module.h"
-#include "ns3/internet-module.h"
-#include "ns3/point-to-point-module.h"
+// AI-Based Adaptive Routing - NS-3 simulation
+//
+// Topology: 10 routers (R0..R9), 10 hosts (H1..H10, Hk attached to R(k-1)).
+// Main flows: UDP H1 -> H10 and TCP H2 -> H9.
+// Cross traffic: random bursty UDP on R1->R3 (Path A branch) and on
+// R2->R3 (Path B branch), so the two candidate paths are congested at
+// different times and route choice actually matters.
+//
+// routingMode=baseline : ns-3 global (shortest-path) routing only.
+// routingMode=adaptive : every decisionInterval seconds, measure the two
+//                        candidate paths and install static host routes
+//                        for H10 along the chosen one.
+//   decisionMode=rule  : queue rule with hysteresis (used to label data).
+//   decisionMode=ml    : ask the trained Python model (ml/predict_route.py);
+//                        falls back to the rule if the model call fails.
+//
+// Path A: R0-R1-R3-R5-R7-R9     Path B: R0-R2-R3-R5-R7-R9
+
 #include "ns3/applications-module.h"
-#include "ns3/internet-apps-module.h"
+#include "ns3/core-module.h"
 #include "ns3/flow-monitor-module.h"
-#include "ns3/traffic-control-module.h"
+#include "ns3/internet-apps-module.h"
+#include "ns3/internet-module.h"
 #include "ns3/ipv4-static-routing-helper.h"
 #include "ns3/ipv4-static-routing.h"
+#include "ns3/network-module.h"
+#include "ns3/point-to-point-module.h"
+#include "ns3/traffic-control-module.h"
+
+#include <array>
+#include <cstdint>
+#include <cstdio>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <map>
+#include <sstream>
+#include <string>
 #include <vector>
 
-#include <iomanip>
-#include <fstream>
+#ifdef _WIN32
+#define POPEN _popen
+#define PCLOSE _pclose
+#else
+#define POPEN popen
+#define PCLOSE pclose
+#endif
 
 using namespace ns3;
 
+// ---------------------------------------------------------------- settings
+static std::string g_outputPrefix = "new_run_";
+static std::string g_decisionMode = "ml";
+static std::string g_pythonCmd = "python3";
+static std::string g_predictScript = "ml/predict_route.py";
+static std::string g_modelPath = "ml/route_selector.pkl";
+static uint32_t g_hysteresis = 20; // packets
+static double g_decisionInterval = 1.0;
+static double g_decisionStart = 3.0;
+static double g_decisionStop = 19.0;
 
-void MonitorQueues(NodeContainer routers)
+static std::string OutputFile(const std::string& filename)
 {
-    std::ofstream file("monitoring_data.csv", std::ios::app);
+    return g_outputPrefix + filename;
+}
 
-    double time = Simulator::Now().GetSeconds();
+// ------------------------------------------------- link byte counters
+// Counters 0..7: both directions of d1 (R0-R1), d2 (R0-R2),
+// d3 (R1-R3, Path A branch) and d4 (R2-R3, Path B branch).
+static constexpr uint64_t LINK_CAPACITY_BPS = 10000000ULL;
+static constexpr uint32_t N_COUNTERS = 8;
+static uint64_t g_linkTxBytes[N_COUNTERS] = {};
+static uint64_t g_monitorSnapshot[N_COUNTERS] = {};
+static uint64_t g_decisionSnapshot[N_COUNTERS] = {};
+static double g_lastMonitorTime = 2.0;
+static double g_lastDecisionTime = 0.0;
+
+static void CountLinkTxBytes(uint32_t counterIndex, Ptr<const Packet> packet)
+{
+    if (counterIndex < N_COUNTERS && packet)
+    {
+        g_linkTxBytes[counterIndex] += packet->GetSize();
+    }
+}
+
+// Utilisation (%) of a duplex link (two counters) since a snapshot.
+static double LinkUtilization(uint32_t firstCounter, const uint64_t* snapshot, double seconds)
+{
+    if (seconds <= 0.0)
+    {
+        return 0.0;
+    }
+    const uint64_t bytes = (g_linkTxBytes[firstCounter] - snapshot[firstCounter]) +
+                           (g_linkTxBytes[firstCounter + 1] - snapshot[firstCounter + 1]);
+    const double percent = bytes * 8.0 / (2.0 * LINK_CAPACITY_BPS * seconds) * 100.0;
+    return percent > 100.0 ? 100.0 : percent;
+}
+
+// ------------------------------------------------------------- topology
+struct Topology
+{
+    NodeContainer routers;
+    std::vector<NetDeviceContainer> links;
+    std::vector<Ipv4InterfaceContainer> interfaces;
+};
+
+static Topology g_topo;
+static std::string g_currentPath = "None";
+
+static uint32_t LinkQueue(size_t linkIndex)
+{
+    uint32_t total = 0;
+    for (uint32_t side = 0; side < 2; ++side)
+    {
+        Ptr<PointToPointNetDevice> dev =
+            DynamicCast<PointToPointNetDevice>(g_topo.links[linkIndex].Get(side));
+        if (!dev)
+        {
+            continue;
+        }
+        if (dev->GetQueue())
+        {
+            total += dev->GetQueue()->GetNPackets();
+        }
+        // Include the traffic-control (qdisc) backlog as well.
+        Ptr<TrafficControlLayer> tc = dev->GetNode()->GetObject<TrafficControlLayer>();
+        if (tc)
+        {
+            Ptr<QueueDisc> qd = tc->GetRootQueueDiscOnDevice(dev);
+            if (qd)
+            {
+                total += qd->GetNPackets();
+            }
+        }
+    }
+    return total;
+}
+
+// ------------------------------------------------------- monitoring
+void MonitorQueues()
+{
+    std::ofstream file(OutputFile("monitoring_data.csv"), std::ios::app);
+    const double time = Simulator::Now().GetSeconds();
 
     uint32_t totalQueuePackets = 0;
-    uint32_t totalDevices = 0;
-
-    for (uint32_t i = 0; i < routers.GetN(); i++)
+    for (size_t k = 0; k < g_topo.links.size(); ++k)
     {
-        Ptr<Node> router = routers.Get(i);
+        totalQueuePackets += LinkQueue(k);
+    }
+    const double averageQueue =
+        static_cast<double>(totalQueuePackets) / (2.0 * g_topo.links.size());
 
-        for (uint32_t j = 0; j < router->GetNDevices(); j++)
+    const double interval = time - g_lastMonitorTime;
+    const double d1 = LinkUtilization(0, g_monitorSnapshot, interval);
+    const double d2 = LinkUtilization(2, g_monitorSnapshot, interval);
+
+    file << std::fixed << std::setprecision(6) << time << "," << totalQueuePackets << ","
+         << averageQueue << "," << d1 << "," << d2 << "," << (d1 + d2) / 2.0 << "\n";
+
+    for (uint32_t i = 0; i < N_COUNTERS; ++i)
+    {
+        g_monitorSnapshot[i] = g_linkTxBytes[i];
+    }
+    g_lastMonitorTime = time;
+
+    Simulator::Schedule(Seconds(1), &MonitorQueues);
+}
+
+// ------------------------------------------------------- decisions
+static std::string RuleDecision(uint32_t queueA, uint32_t queueB)
+{
+    if (g_currentPath == "Path_A")
+    {
+        return (queueB + g_hysteresis < queueA) ? "Path_B" : "Path_A";
+    }
+    if (g_currentPath == "Path_B")
+    {
+        return (queueA + g_hysteresis < queueB) ? "Path_A" : "Path_B";
+    }
+    return (queueA <= queueB) ? "Path_A" : "Path_B";
+}
+
+// Returns "Path_A"/"Path_B" from the Python model, or "" on any failure.
+static std::string MlDecision(uint32_t queueA,
+                              uint32_t queueB,
+                              double utilA,
+                              double utilB,
+                              std::string& rawOutput)
+{
+    std::ostringstream cmd;
+    cmd << g_pythonCmd << " \"" << g_predictScript << "\" --model \"" << g_modelPath << "\" "
+        << queueA << " " << queueB << " " << std::fixed << std::setprecision(4) << utilA << " "
+        << utilB << " " << g_currentPath << " 2>&1";
+
+    FILE* pipe = POPEN(cmd.str().c_str(), "r");
+    if (pipe == nullptr)
+    {
+        rawOutput = "could not start python";
+        return "";
+    }
+    std::array<char, 512> buffer{};
+    while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe) != nullptr)
+    {
+        rawOutput += buffer.data();
+    }
+    const int exitCode = PCLOSE(pipe);
+
+    const bool a = rawOutput.find("\"selected_path\": \"Path_A\"") != std::string::npos;
+    const bool b = rawOutput.find("\"selected_path\": \"Path_B\"") != std::string::npos;
+    if (exitCode != 0 || a == b)
+    {
+        return "";
+    }
+    return a ? "Path_A" : "Path_B";
+}
+
+static bool InstallPath(const std::vector<uint32_t>& path, const Ipv4Address& destination)
+{
+    Ipv4StaticRoutingHelper staticHelper;
+
+    // Remove previous static routes to the destination.
+    for (uint32_t r = 0; r < g_topo.routers.GetN(); ++r)
+    {
+        Ptr<Ipv4StaticRouting> routing =
+            staticHelper.GetStaticRouting(g_topo.routers.Get(r)->GetObject<Ipv4>());
+        for (uint32_t i = routing->GetNRoutes(); i > 0;)
         {
-            Ptr<NetDevice> device = router->GetDevice(j);
-
-            Ptr<PointToPointNetDevice> p2pDevice =
-                DynamicCast<PointToPointNetDevice>(device);
-
-            if (p2pDevice)
+            --i;
+            if (routing->GetRoute(i).GetDest() == destination)
             {
-                Ptr<Queue<Packet>> queue =
-                    p2pDevice->GetQueue();
-
-                if (queue)
-                {
-                    totalQueuePackets += queue->GetNPackets();
-                    totalDevices++;
-                }
+                routing->RemoveRoute(i);
             }
         }
     }
 
-    double averageQueue = 0.0;
-
-    if (totalDevices > 0)
-    {
-        averageQueue =
-            static_cast<double>(totalQueuePackets)
-            / totalDevices;
-    }
-
-    // Current offered traffic:
-    // UDP = 5 Mbps
-    // TCP = approximately 5 Mbps requested
-    // Total offered load = 10 Mbps
-    //
-    // Link capacity = 100 Mbps
-    //
-    // Estimated network utilization = 10 / 100 = 10%
-
-    double utilization = 10.0;
-
-    file << std::fixed << std::setprecision(4)
-         << time << ","
-         << totalQueuePackets << ","
-         << averageQueue << ","
-         << utilization
-         << std::endl;
-
-    file.close();
-
-    std::cout << "Time: "
-              << time
-              << " s | Total Queue: "
-              << totalQueuePackets
-              << " | Average Queue: "
-              << averageQueue
-              << " | Utilization: "
-              << utilization
-              << "%"
-              << std::endl;
-
-    Simulator::Schedule(
-        Seconds(1),
-        &MonitorQueues,
-        routers);
-}
-
-void ApplyAdaptiveRoute(
-    NodeContainer routers,
-    std::vector<NetDeviceContainer> links,
-    std::vector<Ipv4InterfaceContainer> interfaces,
-    NetDeviceContainer host10Link)
-{
-    Ptr<PointToPointNetDevice> devA =
-        DynamicCast<PointToPointNetDevice>(links[0].Get(0));
-    Ptr<PointToPointNetDevice> devB =
-        DynamicCast<PointToPointNetDevice>(links[1].Get(0));
-
-    uint32_t queueA = devA->GetQueue()->GetNPackets();
-    uint32_t queueB = devB->GetQueue()->GetNPackets();
-
-    // Path A: R1-R2-R4-R6-R8-R10
-    // Path B: R1-R3-R4-R6-R8-R10
-    std::vector<uint32_t> pathA = {0, 1, 3, 5, 7, 9};
-    std::vector<uint32_t> pathB = {0, 2, 3, 5, 7, 9};
-
-    std::vector<uint32_t> path =
-        (queueA <= queueB) ? pathA : pathB;
-
-    Ipv4Address destination("10.1.10.2");
-    Ipv4StaticRoutingHelper staticHelper;
-
     for (size_t i = 0; i + 1 < path.size(); ++i)
     {
-        uint32_t current = path[i];
-        uint32_t next = path[i + 1];
+        const uint32_t currentId = g_topo.routers.Get(path[i])->GetId();
+        const uint32_t nextId = g_topo.routers.Get(path[i + 1])->GetId();
+        bool found = false;
 
-        for (size_t k = 0; k < links.size(); ++k)
+        for (size_t k = 0; k < g_topo.links.size() && !found; ++k)
         {
-            Ptr<NetDevice> first = links[k].Get(0);
-            Ptr<NetDevice> second = links[k].Get(1);
-
-            uint32_t firstNode = first->GetNode()->GetId();
-            uint32_t secondNode = second->GetNode()->GetId();
-
-            Ptr<NetDevice> localDevice = nullptr;
+            Ptr<NetDevice> first = g_topo.links[k].Get(0);
+            Ptr<NetDevice> second = g_topo.links[k].Get(1);
+            Ptr<NetDevice> localDevice;
             Ipv4Address nextHop;
 
-            if (firstNode == routers.Get(current)->GetId() &&
-                secondNode == routers.Get(next)->GetId())
+            if (first->GetNode()->GetId() == currentId && second->GetNode()->GetId() == nextId)
             {
                 localDevice = first;
-                nextHop = interfaces[k].GetAddress(1);
+                nextHop = g_topo.interfaces[k].GetAddress(1);
             }
-            else if (secondNode == routers.Get(current)->GetId() &&
-                     firstNode == routers.Get(next)->GetId())
+            else if (second->GetNode()->GetId() == currentId &&
+                     first->GetNode()->GetId() == nextId)
             {
                 localDevice = second;
-                nextHop = interfaces[k].GetAddress(0);
+                nextHop = g_topo.interfaces[k].GetAddress(0);
             }
             else
             {
                 continue;
             }
 
-            Ptr<Ipv4> ipv4 =
-                routers.Get(current)->GetObject<Ipv4>();
-
-            int32_t interfaceIndex =
-                ipv4->GetInterfaceForDevice(localDevice);
-
-            if (interfaceIndex >= 0)
+            Ptr<Ipv4> ipv4 = g_topo.routers.Get(path[i])->GetObject<Ipv4>();
+            const int32_t ifIndex = ipv4->GetInterfaceForDevice(localDevice);
+            if (ifIndex < 0)
             {
-                Ptr<Ipv4StaticRouting> routing =
-                    staticHelper.GetStaticRouting(ipv4);
-
-                routing->AddHostRouteTo(
-                    destination,
-                    nextHop,
-                    static_cast<uint32_t>(interfaceIndex));
+                std::cerr << "ERROR: interface not found on router " << path[i] << std::endl;
+                return false;
             }
+            staticHelper.GetStaticRouting(ipv4)->AddHostRouteTo(destination,
+                                                                nextHop,
+                                                                static_cast<uint32_t>(ifIndex));
+            found = true;
+        }
 
-            break;
+        if (!found)
+        {
+            std::cerr << "ERROR: no link between routers " << path[i] << " and " << path[i + 1]
+                      << std::endl;
+            return false;
+        }
+    }
+    return true;
+}
+
+void ApplyAdaptiveRoute()
+{
+    const double now = Simulator::Now().GetSeconds();
+
+    // Branch links that differ between the paths: d3 (R1-R3) vs d4 (R2-R3).
+    const uint32_t queueA = LinkQueue(2);
+    const uint32_t queueB = LinkQueue(3);
+    const double interval = now - g_lastDecisionTime;
+    const double utilA = LinkUtilization(4, g_decisionSnapshot, interval);
+    const double utilB = LinkUtilization(6, g_decisionSnapshot, interval);
+    for (uint32_t i = 0; i < N_COUNTERS; ++i)
+    {
+        g_decisionSnapshot[i] = g_linkTxBytes[i];
+    }
+    g_lastDecisionTime = now;
+
+    const std::string ruleChoice = RuleDecision(queueA, queueB);
+    std::string selected = ruleChoice;
+    std::string source = "rule";
+
+    if (g_decisionMode == "ml")
+    {
+        std::string raw;
+        const std::string mlChoice = MlDecision(queueA, queueB, utilA, utilB, raw);
+        if (!mlChoice.empty())
+        {
+            selected = mlChoice;
+            source = "ml";
+        }
+        else
+        {
+            source = "fallback";
+            std::cerr << "WARNING: ML call failed at t=" << now << " (" << raw
+                      << "). Using rule: " << ruleChoice << std::endl;
         }
     }
 
-    // Last router connects directly to H10.
-    Ptr<Ipv4> lastIpv4 =
-        routers.Get(9)->GetObject<Ipv4>();
+    const std::vector<uint32_t> path = (selected == "Path_A")
+                                           ? std::vector<uint32_t>{0, 1, 3, 5, 7, 9}
+                                           : std::vector<uint32_t>{0, 2, 3, 5, 7, 9};
 
-    int32_t lastInterface =
-        lastIpv4->GetInterfaceForDevice(host10Link.Get(0));
-
-    if (lastInterface >= 0)
+    if (InstallPath(path, Ipv4Address("10.1.10.2")))
     {
-        staticHelper.GetStaticRouting(lastIpv4)
-            ->AddHostRouteTo(
-                destination,
-                static_cast<uint32_t>(lastInterface));
+        std::ofstream log(OutputFile("adaptive_route_log.csv"), std::ios::app);
+        log << std::fixed << std::setprecision(3) << now << "," << queueA << "," << queueB << ","
+            << utilA << "," << utilB << "," << g_currentPath << "," << selected << "," << source
+            << "\n";
+        g_currentPath = selected;
     }
 
-    std::ofstream log("adaptive_route_log.csv", std::ios::app);
-
-    log << Simulator::Now().GetSeconds() << ","
-        << queueA << ","
-        << queueB << ","
-        << ((queueA <= queueB) ? "Path_A" : "Path_B")
-        << std::endl;
-
-    std::cout << "Adaptive route applied at "
-              << Simulator::Now().GetSeconds()
-              << " seconds. Queue A=" << queueA
-              << ", Queue B=" << queueB
-              << ", selected="
-              << ((queueA <= queueB) ? "Path_A" : "Path_B")
-              << std::endl;
+    if (now + g_decisionInterval <= g_decisionStop + 1e-9)
+    {
+        Simulator::Schedule(Seconds(g_decisionInterval), &ApplyAdaptiveRoute);
+    }
 }
 
+// ------------------------------------------------------------- traffic
+// Optional per-packet trace of the main UDP flow (--packetTrace=1).
+static std::ofstream g_packetTrace;
 
-int main(int argc, char *argv[])
+static void TracePacket(Ptr<const Packet>, const Address&, const Address&, const SeqTsSizeHeader& h)
 {
-   
+    const double now = Simulator::Now().GetSeconds();
+    g_packetTrace << std::fixed << std::setprecision(6) << h.GetSeq() << ","
+                  << h.GetTs().GetSeconds() << "," << now << "," << now - h.GetTs().GetSeconds()
+                  << "\n";
+}
+
+static void InstallUdpFlow(Ptr<Node> src,
+                           Ptr<Node> dst,
+                           Ipv4Address dstAddr,
+                           uint16_t port,
+                           const std::string& rate,
+                           const std::string& onTime,
+                           const std::string& offTime,
+                           double start,
+                           double stop,
+                           bool trace = false)
+{
+    PacketSinkHelper sink("ns3::UdpSocketFactory", InetSocketAddress(Ipv4Address::GetAny(), port));
+    if (trace)
+    {
+        sink.SetAttribute("EnableSeqTsSizeHeader", BooleanValue(true));
+    }
+    ApplicationContainer s = sink.Install(dst);
+    if (trace)
+    {
+        s.Get(0)->TraceConnectWithoutContext("RxWithSeqTsSize", MakeCallback(&TracePacket));
+    }
+    s.Start(Seconds(1));
+    s.Stop(Seconds(stop));
+
+    OnOffHelper client("ns3::UdpSocketFactory", InetSocketAddress(dstAddr, port));
+    client.SetAttribute("DataRate", DataRateValue(DataRate(rate)));
+    client.SetAttribute("PacketSize", UintegerValue(1024));
+    client.SetAttribute("OnTime", StringValue(onTime));
+    client.SetAttribute("OffTime", StringValue(offTime));
+    if (trace)
+    {
+        client.SetAttribute("EnableSeqTsSizeHeader", BooleanValue(true));
+    }
+    ApplicationContainer c = client.Install(src);
+    c.Start(Seconds(start));
+    c.Stop(Seconds(stop));
+}
+
+int main(int argc, char* argv[])
+{
     std::string trafficLevel = "low";
+    std::string routingMode = "adaptive";
+    uint32_t seed = 1;
+    bool crossTraffic = true;
+    bool packetTrace = false;
 
-CommandLine cmd;
-cmd.AddValue("trafficLevel",
-             "Traffic level: low, medium, high",
-             trafficLevel);
-cmd.Parse(argc, argv);
+    CommandLine cmd(__FILE__);
+    cmd.AddValue("trafficLevel", "Traffic level: low, medium, high", trafficLevel);
+    cmd.AddValue("routingMode", "baseline or adaptive", routingMode);
+    cmd.AddValue("decisionMode", "Adaptive decision maker: rule or ml", g_decisionMode);
+    cmd.AddValue("seed", "Run number for the random streams", seed);
+    cmd.AddValue("outputPrefix", "Output path/prefix (directory must exist)", g_outputPrefix);
+    cmd.AddValue("pythonCmd", "Python interpreter used for ML decisions", g_pythonCmd);
+    cmd.AddValue("predictScript", "Path to ml/predict_route.py", g_predictScript);
+    cmd.AddValue("modelPath", "Path to the trained route selector .pkl", g_modelPath);
+    cmd.AddValue("hysteresis", "Rule: queue margin (packets) needed to switch", g_hysteresis);
+    cmd.AddValue("decisionInterval", "Seconds between adaptive decisions", g_decisionInterval);
+    cmd.AddValue("crossTraffic", "Enable bursty cross traffic on the path branches", crossTraffic);
+    cmd.AddValue("packetTrace", "Write per-packet trace of the main UDP flow", packetTrace);
+    cmd.Parse(argc, argv);
 
-    // Create 10 routers
+    if (trafficLevel != "low" && trafficLevel != "medium" && trafficLevel != "high")
+    {
+        std::cerr << "Invalid trafficLevel. Use low, medium, or high." << std::endl;
+        return 1;
+    }
+    if (routingMode != "baseline" && routingMode != "adaptive")
+    {
+        std::cerr << "Invalid routingMode. Use baseline or adaptive." << std::endl;
+        return 1;
+    }
+    if (g_decisionMode != "rule" && g_decisionMode != "ml")
+    {
+        std::cerr << "Invalid decisionMode. Use rule or ml." << std::endl;
+        return 1;
+    }
+
+    // Same base seed, different run number => independent, reproducible runs.
+    RngSeedManager::SetSeed(12345);
+    RngSeedManager::SetRun(seed);
+
     NodeContainer routers;
     routers.Create(10);
-
-    // Create 10 hosts
     NodeContainer hosts;
     hosts.Create(10);
 
-    // Install Internet stack on routers and hosts
     InternetStackHelper internet;
     internet.Install(routers);
     internet.Install(hosts);
 
-    // Point-to-point link configuration
+    // Router links: 10 Mbps, 5 ms.
     PointToPointHelper p2p;
-    p2p.SetDeviceAttribute("DataRate", StringValue("100Mbps"));
+    p2p.SetDeviceAttribute("DataRate", StringValue("10Mbps"));
     p2p.SetChannelAttribute("Delay", StringValue("5ms"));
 
-    // =========================
-    // ROUTER-TO-ROUTER LINKS
-    // =========================
+    const std::vector<std::pair<uint32_t, uint32_t>> edges = {
+        {0, 1}, {0, 2}, {1, 3}, {2, 3}, {1, 4}, {3, 5}, {4, 5},
+        {4, 6}, {5, 7}, {6, 7}, {6, 8}, {7, 9}, {8, 9}};
 
-    NetDeviceContainer d1 = p2p.Install(routers.Get(0), routers.Get(1));
-    NetDeviceContainer d2 = p2p.Install(routers.Get(0), routers.Get(2));
-    NetDeviceContainer d3 = p2p.Install(routers.Get(1), routers.Get(3));
-    NetDeviceContainer d4 = p2p.Install(routers.Get(2), routers.Get(3));
+    std::vector<NetDeviceContainer> links;
+    for (const auto& e : edges)
+    {
+        links.push_back(p2p.Install(routers.Get(e.first), routers.Get(e.second)));
+    }
 
-    NetDeviceContainer d5 = p2p.Install(routers.Get(1), routers.Get(4));
-    NetDeviceContainer d6 = p2p.Install(routers.Get(3), routers.Get(5));
-    NetDeviceContainer d7 = p2p.Install(routers.Get(4), routers.Get(5));
+    // Byte counters on d1, d2, d3, d4 (both directions).
+    for (uint32_t l = 0; l < 4; ++l)
+    {
+        for (uint32_t side = 0; side < 2; ++side)
+        {
+            links[l].Get(side)->TraceConnectWithoutContext(
+                "PhyTxEnd",
+                MakeBoundCallback(&CountLinkTxBytes, 2 * l + side));
+        }
+    }
 
-    NetDeviceContainer d8 = p2p.Install(routers.Get(4), routers.Get(6));
-    NetDeviceContainer d9 = p2p.Install(routers.Get(5), routers.Get(7));
-    NetDeviceContainer d10 = p2p.Install(routers.Get(6), routers.Get(7));
-
-    NetDeviceContainer d11 = p2p.Install(routers.Get(6), routers.Get(8));
-    NetDeviceContainer d12 = p2p.Install(routers.Get(7), routers.Get(9));
-    NetDeviceContainer d13 = p2p.Install(routers.Get(8), routers.Get(9));
-
-    // =========================
-    // ROUTER-TO-HOST LINKS
-    // =========================
-
+    // Host links: 100 Mbps, 2 ms. Hk attached to R(k-1).
     PointToPointHelper hostP2P;
     hostP2P.SetDeviceAttribute("DataRate", StringValue("100Mbps"));
     hostP2P.SetChannelAttribute("Delay", StringValue("2ms"));
 
-    NetDeviceContainer h1 = hostP2P.Install(routers.Get(0), hosts.Get(0));
-    NetDeviceContainer h2 = hostP2P.Install(routers.Get(1), hosts.Get(1));
-    NetDeviceContainer h3 = hostP2P.Install(routers.Get(2), hosts.Get(2));
-    NetDeviceContainer h4 = hostP2P.Install(routers.Get(3), hosts.Get(3));
-    NetDeviceContainer h5 = hostP2P.Install(routers.Get(4), hosts.Get(4));
-
-    NetDeviceContainer h6 = hostP2P.Install(routers.Get(5), hosts.Get(5));
-    NetDeviceContainer h7 = hostP2P.Install(routers.Get(6), hosts.Get(6));
-    NetDeviceContainer h8 = hostP2P.Install(routers.Get(7), hosts.Get(7));
-    NetDeviceContainer h9 = hostP2P.Install(routers.Get(8), hosts.Get(8));
-    NetDeviceContainer h10 = hostP2P.Install(routers.Get(9), hosts.Get(9));
-
-   // =========================
-// ASSIGN ROUTER LINK IP ADDRESSES
-// =========================
-
-Ipv4AddressHelper address;
-
-address.SetBase("10.0.1.0", "255.255.255.0");
-Ipv4InterfaceContainer i1 = address.Assign(d1);
-
-address.SetBase("10.0.2.0", "255.255.255.0");
-Ipv4InterfaceContainer i2 = address.Assign(d2);
-
-address.SetBase("10.0.3.0", "255.255.255.0");
-Ipv4InterfaceContainer i3 = address.Assign(d3);
-
-address.SetBase("10.0.4.0", "255.255.255.0");
-Ipv4InterfaceContainer i4 = address.Assign(d4);
-
-address.SetBase("10.0.5.0", "255.255.255.0");
-Ipv4InterfaceContainer i5 = address.Assign(d5);
-
-address.SetBase("10.0.6.0", "255.255.255.0");
-Ipv4InterfaceContainer i6 = address.Assign(d6);
-
-address.SetBase("10.0.7.0", "255.255.255.0");
-Ipv4InterfaceContainer i7 = address.Assign(d7);
-
-address.SetBase("10.0.8.0", "255.255.255.0");
-Ipv4InterfaceContainer i8 = address.Assign(d8);
-
-address.SetBase("10.0.9.0", "255.255.255.0");
-Ipv4InterfaceContainer i9 = address.Assign(d9);
-
-address.SetBase("10.0.10.0", "255.255.255.0");
-Ipv4InterfaceContainer i10 = address.Assign(d10);
-
-address.SetBase("10.0.11.0", "255.255.255.0");
-Ipv4InterfaceContainer i11 = address.Assign(d11);
-
-address.SetBase("10.0.12.0", "255.255.255.0");
-Ipv4InterfaceContainer i12 = address.Assign(d12);
-
-address.SetBase("10.0.13.0", "255.255.255.0");
-Ipv4InterfaceContainer i13 = address.Assign(d13);
-
-    // Host links
-    address.SetBase("10.1.1.0", "255.255.255.0");
-    Ipv4InterfaceContainer host1 = address.Assign(h1);
-
-    address.SetBase("10.1.2.0", "255.255.255.0");
-    address.Assign(h2);
-
-    address.SetBase("10.1.3.0", "255.255.255.0");
-    address.Assign(h3);
-
-    address.SetBase("10.1.4.0", "255.255.255.0");
-    address.Assign(h4);
-
-    address.SetBase("10.1.5.0", "255.255.255.0");
-    address.Assign(h5);
-
-    address.SetBase("10.1.6.0", "255.255.255.0");
-    address.Assign(h6);
-
-    address.SetBase("10.1.7.0", "255.255.255.0");
-    address.Assign(h7);
-
-    address.SetBase("10.1.8.0", "255.255.255.0");
-    address.Assign(h8);
-
-    address.SetBase("10.1.9.0", "255.255.255.0");
-    address.Assign(h9);
-
-    address.SetBase("10.1.10.0", "255.255.255.0");
-    Ipv4InterfaceContainer host10 = address.Assign(h10);
-
-// =========================
-// ROUTING
-// =========================
-
-Ipv4GlobalRoutingHelper::PopulateRoutingTables();
-
-Ipv4GlobalRoutingHelper routingHelper;
-
-Ptr<OutputStreamWrapper> routingStream =
-    Create<OutputStreamWrapper>("routing-table.txt", std::ios::out);
-
-routingHelper.PrintRoutingTableAllAt(Seconds(1), routingStream);
-
-// =========================
-// UDP TRAFFIC H1 -> H10
-// =========================
-
-uint16_t udpPort = 5000;
-
-// UDP receiver on H10
-PacketSinkHelper udpSink(
-    "ns3::UdpSocketFactory",
-    InetSocketAddress(Ipv4Address::GetAny(), udpPort));
-
-ApplicationContainer udpServer = udpSink.Install(hosts.Get(9));
-
-udpServer.Start(Seconds(1));
-udpServer.Stop(Seconds(20));
-
-std::string udpRate;
-std::string tcpRate;
-
-if (trafficLevel == "low")
-{
-    udpRate = "5Mbps";
-    tcpRate = "5Mbps";
-}
-else if (trafficLevel == "medium")
-{
-    udpRate = "20Mbps";
-    tcpRate = "20Mbps";
-}
-else if (trafficLevel == "high")
-{
-    udpRate = "40Mbps";
-    tcpRate = "40Mbps";
-}
-else
-{
-    std::cout << "Invalid traffic level!" << std::endl;
-    return 1;
-}
-
-// UDP sender on H1
-OnOffHelper udpClient(
-    "ns3::UdpSocketFactory",
-    InetSocketAddress(host10.GetAddress(1), udpPort));
-
-udpClient.SetAttribute("DataRate",
-                       DataRateValue(DataRate(udpRate)));
-
-udpClient.SetAttribute(
-    "PacketSize",
-    UintegerValue(1024));
-
-ApplicationContainer udpApp = udpClient.Install(hosts.Get(0));
-
-udpApp.Start(Seconds(2));
-udpApp.Stop(Seconds(20));
-
-
-// =========================
-// TCP TRAFFIC H2 -> H9
-// =========================
-
-uint16_t tcpPort = 5001;
-
-// TCP receiver on H9
-PacketSinkHelper tcpSink(
-    "ns3::TcpSocketFactory",
-    InetSocketAddress(Ipv4Address::GetAny(), tcpPort));
-
-ApplicationContainer tcpServer = tcpSink.Install(hosts.Get(8));
-
-tcpServer.Start(Seconds(1));
-tcpServer.Stop(Seconds(20));
-
-// TCP sender on H2
-OnOffHelper tcpClient(
-    "ns3::TcpSocketFactory",
-    InetSocketAddress(Ipv4Address("10.1.9.2"), tcpPort));
-
-
-tcpClient.SetAttribute("DataRate",
-                       DataRateValue(DataRate(tcpRate)));
-
-tcpClient.SetAttribute(
-    "PacketSize",
-    UintegerValue(1024));
-
-ApplicationContainer tcpApp = tcpClient.Install(hosts.Get(1));
-
-tcpApp.Start(Seconds(3));
-tcpApp.Stop(Seconds(20));
-
-
-
-    std::vector<NetDeviceContainer> routerLinks = {
-    d1, d2, d3, d4, d5, d6, d7,
-    d8, d9, d10, d11, d12, d13
-};
-
-std::vector<Ipv4InterfaceContainer> routerInterfaces = {
-    i1, i2, i3, i4, i5, i6, i7,
-    i8, i9, i10, i11, i12, i13
-};
-
-{
-    std::ofstream log("adaptive_route_log.csv");
-    log << "time,queue_A,queue_B,selected_path\n";
-}
-
-Simulator::Schedule(
-    Seconds(10),
-    &ApplyAdaptiveRoute,
-    routers,
-    routerLinks,
-    routerInterfaces,
-    h10);
-    
-
-   // =========================
-// FLOW MONITOR
-// =========================
-
-std::ofstream monitoringFile("monitoring_data.csv");
-
-monitoringFile << "time,total_queue_packets,"
-               << "average_queue_packets,"
-               << "utilization_percent"
-               << std::endl;
-
-monitoringFile.close();
-
-FlowMonitorHelper flowHelper;
-
-Ptr<FlowMonitor> monitor =
-    flowHelper.InstallAll();
-
-Simulator::Schedule(
-    Seconds(2),
-    &MonitorQueues,
-    routers);
-
-Simulator::Stop(Seconds(22));
-
-Simulator::Run();
-
-// Check for lost packets
-monitor->CheckForLostPackets();
-
-// Get classifier
-Ptr<Ipv4FlowClassifier> classifier =
-    DynamicCast<Ipv4FlowClassifier>(
-        flowHelper.GetClassifier());
-
-// Get flow statistics
-std::map<FlowId, FlowMonitor::FlowStats> stats =
-    monitor->GetFlowStats();
-
-// Create CSV file
-std::ofstream csvFile("network_data.csv");
-
-// CSV header
-csvFile << "flow_id,source,destination,"
-        << "packets_sent,packets_received,"
-        << "packets_lost,delay,"
-        << "throughput,jitter"
-        << std::endl;
-
-// Print and save flow data
-for (const auto &flow : stats)
-{
-    Ipv4FlowClassifier::FiveTuple t =
-        classifier->FindFlow(flow.first);
-
-    double delay = 0.0;
-
-    if (flow.second.rxPackets > 0)
+    std::vector<NetDeviceContainer> hostLinks;
+    for (uint32_t i = 0; i < 10; ++i)
     {
-        delay =
-            flow.second.delaySum.GetSeconds()
-            / flow.second.rxPackets;
+        hostLinks.push_back(hostP2P.Install(routers.Get(i), hosts.Get(i)));
     }
 
-    double throughput = 0.0;
-
-    if (flow.second.timeLastRxPacket.GetSeconds() >
-        flow.second.timeFirstTxPacket.GetSeconds())
+    Ipv4AddressHelper address;
+    std::vector<Ipv4InterfaceContainer> interfaces;
+    for (size_t i = 0; i < links.size(); ++i)
     {
-        throughput =
-            flow.second.rxBytes * 8.0 /
-            (flow.second.timeLastRxPacket.GetSeconds()
-            - flow.second.timeFirstTxPacket.GetSeconds())
-            / 1000000;
+        address.SetBase(("10.0." + std::to_string(i + 1) + ".0").c_str(), "255.255.255.0");
+        interfaces.push_back(address.Assign(links[i]));
+    }
+    std::vector<Ipv4InterfaceContainer> hostIfs;
+    for (uint32_t i = 0; i < 10; ++i)
+    {
+        address.SetBase(("10.1." + std::to_string(i + 1) + ".0").c_str(), "255.255.255.0");
+        hostIfs.push_back(address.Assign(hostLinks[i]));
     }
 
-    double jitter = 0.0;
+    Ipv4GlobalRoutingHelper::PopulateRoutingTables();
 
-    if (flow.second.rxPackets > 1)
+    Ipv4GlobalRoutingHelper routingHelper;
+    routingHelper.PrintRoutingTableAllAt(
+        Seconds(1),
+        Create<OutputStreamWrapper>(OutputFile("routing-table.txt"), std::ios::out));
+    routingHelper.PrintRoutingTableAllAt(
+        Seconds(11),
+        Create<OutputStreamWrapper>(OutputFile("routing-table-adaptive.txt"), std::ios::out));
+
+    std::string rate = "5Mbps";
+    if (trafficLevel == "medium")
     {
-        jitter =
-            flow.second.jitterSum.GetSeconds()
-            / (flow.second.rxPackets - 1);
+        rate = "20Mbps";
+    }
+    else if (trafficLevel == "high")
+    {
+        rate = "40Mbps";
     }
 
-    // Print to terminal
-    std::cout << "Flow " << flow.first << std::endl;
+    const std::string onOneSec = "ns3::ConstantRandomVariable[Constant=1.0]";
+    const std::string onJitter = "ns3::UniformRandomVariable[Min=0.5|Max=1.5]";
 
-    std::cout << "Source: "
-              << t.sourceAddress << std::endl;
+    // Main UDP flow: H1 -> H10.
+    if (packetTrace)
+    {
+        g_packetTrace.open(OutputFile("udp_packet_trace.csv"));
+        g_packetTrace << "seq,tx_time,rx_time,delay\n";
+    }
+    InstallUdpFlow(hosts.Get(0),
+                   hosts.Get(9),
+                   hostIfs[9].GetAddress(1),
+                   5000,
+                   rate,
+                   onJitter,
+                   onJitter,
+                   2.0,
+                   20.0,
+                   packetTrace);
 
-    std::cout << "Destination: "
-              << t.destinationAddress << std::endl;
+    // Main TCP flow: H2 -> H9.
+    {
+        PacketSinkHelper tcpSink("ns3::TcpSocketFactory",
+                                 InetSocketAddress(Ipv4Address::GetAny(), 5001));
+        ApplicationContainer s = tcpSink.Install(hosts.Get(8));
+        s.Start(Seconds(1));
+        s.Stop(Seconds(20));
 
-    std::cout << "Packets Sent: "
-              << flow.second.txPackets << std::endl;
+        OnOffHelper tcpClient("ns3::TcpSocketFactory",
+                              InetSocketAddress(hostIfs[8].GetAddress(1), 5001));
+        tcpClient.SetAttribute("DataRate", DataRateValue(DataRate(rate)));
+        tcpClient.SetAttribute("PacketSize", UintegerValue(1024));
+        tcpClient.SetAttribute("OnTime", StringValue(onOneSec));
+        tcpClient.SetAttribute("OffTime", StringValue(onOneSec));
+        ApplicationContainer c = tcpClient.Install(hosts.Get(1));
+        c.Start(Seconds(3));
+        c.Stop(Seconds(20));
+    }
 
-    std::cout << "Packets Received: "
-              << flow.second.rxPackets << std::endl;
+    // Bursty cross traffic: H2 (R1) -> H4 (R3) loads the Path A branch,
+    // H3 (R2) -> H4 (R3) loads the Path B branch. Independent random bursts.
+    if (crossTraffic)
+    {
+        const std::string burstOn = "ns3::ExponentialRandomVariable[Mean=2.5|Bound=8]";
+        const std::string burstOff = "ns3::ExponentialRandomVariable[Mean=2.5|Bound=8]";
+        InstallUdpFlow(hosts.Get(1),
+                       hosts.Get(3),
+                       hostIfs[3].GetAddress(1),
+                       6000,
+                       "9Mbps",
+                       burstOn,
+                       burstOff,
+                       2.0,
+                       20.0);
+        InstallUdpFlow(hosts.Get(2),
+                       hosts.Get(3),
+                       hostIfs[3].GetAddress(1),
+                       6001,
+                       "9Mbps",
+                       burstOn,
+                       burstOff,
+                       2.0,
+                       20.0);
+    }
 
-    std::cout << "Packets Lost: "
-              << flow.second.lostPackets << std::endl;
+    g_topo.routers = routers;
+    g_topo.links = links;
+    g_topo.interfaces = interfaces;
 
-    std::cout << "Average Delay: "
-              << delay
-              << " seconds" << std::endl;
+    {
+        std::ofstream log(OutputFile("adaptive_route_log.csv"));
+        log << "time,queue_A,queue_B,util_A,util_B,current_path,selected_path,decision_source\n";
+    }
+    {
+        std::ofstream file(OutputFile("monitoring_data.csv"));
+        file << "time,total_queue_packets,average_queue_packets,"
+                "d1_utilization_percent,d2_utilization_percent,utilization_percent\n";
+    }
 
-    std::cout << "Throughput: "
-              << throughput
-              << " Mbps" << std::endl;
+    if (routingMode == "adaptive")
+    {
+        g_lastDecisionTime = g_decisionStart - g_decisionInterval;
+        Simulator::Schedule(Seconds(g_decisionStart), &ApplyAdaptiveRoute);
+    }
 
-    std::cout << "Jitter: "
-              << jitter
-              << " seconds" << std::endl;
+    FlowMonitorHelper flowHelper;
+    Ptr<FlowMonitor> monitor = flowHelper.InstallAll();
 
-    std::cout << "--------------------------"
-              << std::endl;
+    Simulator::Schedule(Seconds(3), &MonitorQueues);
 
-    // Save to CSV
-    csvFile << flow.first << ","
-            << t.sourceAddress << ","
-            << t.destinationAddress << ","
-            << flow.second.txPackets << ","
-            << flow.second.rxPackets << ","
-            << flow.second.lostPackets << ","
-            << delay << ","
-            << throughput << ","
-            << jitter
-            << std::endl;
-}
+    // Let in-flight packets drain after the applications stop at 20 s.
+    Simulator::Stop(Seconds(25));
 
-csvFile.close();
+    std::cout << "Starting simulation: trafficLevel=" << trafficLevel
+              << ", routingMode=" << routingMode
+              << (routingMode == "adaptive" ? ", decisionMode=" + g_decisionMode : "")
+              << ", seed=" << seed << ", outputPrefix=" << g_outputPrefix << std::endl;
 
-Simulator::Destroy();
+    Simulator::Run();
 
+    monitor->CheckForLostPackets();
+    Ptr<Ipv4FlowClassifier> classifier =
+        DynamicCast<Ipv4FlowClassifier>(flowHelper.GetClassifier());
+
+    std::ofstream csvFile(OutputFile("network_data.csv"));
+    if (!csvFile.is_open())
+    {
+        std::cerr << "ERROR: Cannot create network_data.csv (does the output directory exist?)"
+                  << std::endl;
+        Simulator::Destroy();
+        return 1;
+    }
+
+    csvFile << "flow_id,source,destination,dst_port,packets_sent,packets_received,packets_lost,"
+               "delay,throughput,jitter\n";
+
+    for (const auto& flow : monitor->GetFlowStats())
+    {
+        const Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow(flow.first);
+        const FlowMonitor::FlowStats& s = flow.second;
+
+        const uint64_t lost = s.txPackets >= s.rxPackets ? s.txPackets - s.rxPackets : 0;
+        const double delay = s.rxPackets > 0 ? s.delaySum.GetSeconds() / s.rxPackets : 0.0;
+        const double span = s.timeLastRxPacket.GetSeconds() - s.timeFirstTxPacket.GetSeconds();
+        const double throughput =
+            (s.rxPackets > 0 && span > 0) ? s.rxBytes * 8.0 / span / 1e6 : 0.0;
+        const double jitter =
+            s.rxPackets > 1 ? s.jitterSum.GetSeconds() / (s.rxPackets - 1) : 0.0;
+
+        csvFile << flow.first << "," << t.sourceAddress << "," << t.destinationAddress << ","
+                << t.destinationPort << "," << s.txPackets << "," << s.rxPackets << "," << lost
+                << "," << std::setprecision(10) << delay << "," << throughput << "," << jitter
+                << "\n";
+    }
+    csvFile.close();
+
+    std::cout << "Saved results with prefix " << g_outputPrefix << std::endl;
+    Simulator::Destroy();
     return 0;
 }

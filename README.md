@@ -15,6 +15,42 @@ The intended adaptive-routing workflow is to observe network conditions, evaluat
 4. **Data analysis and Machine Learning:** Python, Pandas, and Scikit-learn are used to prepare the dataset, examine network performance, and experiment with a preliminary routing-cost model.
 5. **Adaptive routing evaluation:** Routing decisions can be assessed using network measurements, then compared with the traditional-routing baseline in repeatable simulations.
 
+## Running the complete pipeline
+
+One command runs everything, from simulation through training to evaluation:
+
+```bash
+python run_pipeline.py            # full run (~132 simulations)
+python run_pipeline.py --quick    # small smoke test
+python run_pipeline.py --stages train eval report   # selected stages only
+```
+
+If ns-3 is not installed locally, the script automatically builds and uses a
+Docker image (`docker/Dockerfile`: ns-3.47 + Python + scikit-learn), so the only
+requirement on Windows is Docker Desktop. On Linux/WSL with ns-3 installed, set
+`NS3_DIR=/path/to/ns-3` to run natively.
+
+| Stage | What it does | Output |
+|-------|--------------|--------|
+| build | compiles `ns3/adaptive_topology.cc` | ns-3 binary |
+| collect | rule-based adaptive runs on training seeds 1-20 | `results/pipeline/train/` |
+| train | compares majority / logistic / tree / forest models, split by run | `ml/route_selector.pkl`, `results/pipeline/training/` |
+| eval | baseline vs adaptive-rule vs adaptive-ML on unseen seeds 1001-1008 | `results/pipeline/eval/` |
+| report | aggregates metrics and produces a plot | `results/pipeline/evaluation/report.md`, `comparison.png` |
+
+Simulator options (`adaptive_topology --help`): `--routingMode=baseline|adaptive`,
+`--decisionMode=rule|ml`, `--trafficLevel=low|medium|high`, `--seed`,
+`--outputPrefix`, `--pythonCmd`, `--predictScript`, `--modelPath`,
+`--hysteresis`, `--decisionInterval`, `--crossTraffic`.
+
+The ML model is called at each decision via `ml/predict_route.py`. If the call
+fails, the simulator logs a warning and falls back to the queue rule
+(`decision_source=fallback` in `adaptive_route_log.csv`), so a run never crashes.
+
+**Interpreting the results:** training labels come from the hysteresis queue rule,
+so the classifier's accuracy measures how well it imitates the rule. The routing
+benefit is measured separately by the evaluation stage on held-out seeds.
+
 ## Technologies
 - **NS-3 and C++:** network topology and simulation
 - **Python:** data processing and model experimentation

@@ -1,0 +1,4 @@
+model,accuracy,balanced_accuracy,precision_macro,recall_macro,f1_macro,f1_weighted
+Dummy baseline,0.7666666666666667,0.5,0.38333333333333336,0.5,0.4339622641509434,0.6654088050314466
+Random Forest - basic,1.0,1.0,1.0,1.0,1.0,1.0
+Random Forest - engineered,1.0,1.0,1.0,1.0,1.0,1.0

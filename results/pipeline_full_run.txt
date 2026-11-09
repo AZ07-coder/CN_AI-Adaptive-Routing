@@ -1,0 +1,318 @@
+$ docker run --rm -v D:\AI-Adaptive-Routing:/project -w /project ai-routing python3 run_pipeline.py
+
+===== BUILD =====
+$ ./ns3 build adaptive_topology
+-- Using default output directory /opt/ns3/build
+-- [33mProceeding without cmake-format[0m
+-- [33mPython: development libraries were not found[0m
+-- [33mBoost was not found[0m
+-- [33mdocs: doxygen documentation not enabled due to missing dependencies: doxygen dot dia[0m
+-- Failed to locate sphinx-build executable (missing: SPHINX_EXECUTABLE) 
+-- [33mdocs: sphinx documentation not enabled due to missing dependencies: Sphinx epstopdf pdflatex latexmk dvipng dia[0m
+-- Processing src/applications
+-- Processing src/core
+-- Boost Units are an optional feature of length.cc.  Ubuntu ships it within the libboost-dev package.  You may need to clean up the CMake cache after installing it to pass this check.
+-- Processing src/flow-monitor
+-- Processing src/internet
+-- Processing src/internet-apps
+-- Processing src/network
+-- Processing src/point-to-point
+-- Processing src/traffic-control
+-- Processing src/bridge
+-- Processing src/stats
+-- ---- Summary of ns-3 settings:
+Build profile                 : optimized
+Build directory               : /opt/ns3/build
+Build with runtime asserts    : OFF (not requested)
+Build with runtime logging    : OFF (not requested)
+Build version embedding       : OFF (not requested)
+BRITE Integration             : [31mOFF (missing dependency)[0m
+DES Metrics event collection  : OFF (not requested)
+DPDK NetDevice                : OFF (not requested)
+Emulation FdNetDevice         : [31mOFF (missing dependency)[0m
+Examples                      : OFF (not requested)
+File descriptor NetDevice     : [31mOFF (missing dependency)[0m
+GNU Scientific Library (GSL)  : [31mOFF (GSL was not found)[0m
+GtkConfigStore                : [31mOFF (Harfbuzz is required by GTK3 and was not found)[0m
+LibXml2 support               : [32mON[0m
+MPI Support                   : OFF (not requested)
+ns-3 Click Integration        : [31mOFF (missing dependency)[0m
+ns-3 OpenFlow Integration     : [31mOFF (missing dependency)[0m
+Netmap emulation FdNetDevice  : [31mOFF (missing dependency)[0m
+PyViz visualizer              : [31mOFF (Python Bindings are disabled)[0m
+Python Bindings               : OFF (not requested)
+SQLite support                : [32mON[0m
+Eigen3 support                : [31mOFF (Eigen was not found)[0m
+Tap Bridge                    : [32mON[0m
+Tap FdNetDevice               : [31mOFF (missing dependency)[0m
+Tests                         : OFF (not requested)
+
+
+Modules configured to be built:
+applications              bridge                    core                      
+flow-monitor              internet                  internet-apps             
+network                   point-to-point            stats                     
+traffic-control           
+
+Modules that cannot be built:
+mpi                       
+
+
+-- Configuring done
+-- Generating done
+-- Build files have been written to: /opt/ns3/cmake-cache
+[0/2] Re-checking globbed directories...
+[1/2] Building CXX object scratch/CMakeFiles/scratch_adaptive_topology.dir/adaptive_topology.cc.o
+[2/2] Linking CXX executable /opt/ns3/build/scratch/ns3.47-adaptive_topology-optimized
+Finished executing the following commands:
+/usr/bin/cmake --build /opt/ns3/cmake-cache -j 11 --target scratch_adaptive_topology
+
+===== COLLECT =====
+Collecting training data: 60 rule-based adaptive runs
+  [1/60] done results/pipeline/train/low_seed12
+  [2/60] done results/pipeline/train/low_seed7
+  [3/60] done results/pipeline/train/low_seed1
+  [4/60] done results/pipeline/train/low_seed2
+  [5/60] done results/pipeline/train/low_seed3
+  [6/60] done results/pipeline/train/low_seed10
+  [7/60] done results/pipeline/train/low_seed9
+  [8/60] done results/pipeline/train/low_seed11
+  [9/60] done results/pipeline/train/low_seed5
+  [10/60] done results/pipeline/train/low_seed4
+  [11/60] done results/pipeline/train/low_seed6
+  [12/60] done results/pipeline/train/low_seed8
+  [13/60] done results/pipeline/train/low_seed13
+  [14/60] done results/pipeline/train/low_seed15
+  [15/60] done results/pipeline/train/low_seed16
+  [16/60] done results/pipeline/train/low_seed14
+  [17/60] done results/pipeline/train/low_seed17
+  [18/60] done results/pipeline/train/low_seed20
+  [19/60] done results/pipeline/train/low_seed18
+  [20/60] done results/pipeline/train/low_seed19
+  [21/60] done results/pipeline/train/medium_seed1
+  [22/60] done results/pipeline/train/medium_seed2
+  [23/60] done results/pipeline/train/medium_seed3
+  [24/60] done results/pipeline/train/medium_seed4
+  [25/60] done results/pipeline/train/medium_seed7
+  [26/60] done results/pipeline/train/medium_seed9
+  [27/60] done results/pipeline/train/medium_seed5
+  [28/60] done results/pipeline/train/medium_seed8
+  [29/60] done results/pipeline/train/medium_seed11
+  [30/60] done results/pipeline/train/medium_seed6
+  [31/60] done results/pipeline/train/medium_seed10
+  [32/60] done results/pipeline/train/medium_seed12
+  [33/60] done results/pipeline/train/medium_seed16
+  [34/60] done results/pipeline/train/medium_seed15
+  [35/60] done results/pipeline/train/medium_seed13
+  [36/60] done results/pipeline/train/medium_seed14
+  [37/60] done results/pipeline/train/medium_seed17
+  [38/60] done results/pipeline/train/medium_seed20
+  [39/60] done results/pipeline/train/medium_seed18
+  [40/60] done results/pipeline/train/medium_seed19
+  [41/60] done results/pipeline/train/high_seed1
+  [42/60] done results/pipeline/train/high_seed3
+  [43/60] done results/pipeline/train/high_seed7
+  [44/60] done results/pipeline/train/high_seed2
+  [45/60] done results/pipeline/train/high_seed5
+  [46/60] done results/pipeline/train/high_seed4
+  [47/60] done results/pipeline/train/high_seed6
+  [48/60] done results/pipeline/train/high_seed8
+  [49/60] done results/pipeline/train/high_seed9
+  [50/60] done results/pipeline/train/high_seed11
+  [51/60] done results/pipeline/train/high_seed12
+  [52/60] done results/pipeline/train/high_seed10
+  [53/60] done results/pipeline/train/high_seed13
+  [54/60] done results/pipeline/train/high_seed14
+  [55/60] done results/pipeline/train/high_seed15
+  [56/60] done results/pipeline/train/high_seed16
+  [57/60] done results/pipeline/train/high_seed20
+  [58/60] done results/pipeline/train/high_seed19
+  [59/60] done results/pipeline/train/high_seed17
+  [60/60] done results/pipeline/train/high_seed18
+
+===== TRAIN =====
+$ /usr/local/bin/python3 /project/ml/train_route_selector.py --runs /project/results/pipeline/train --out /project/ml/route_selector.pkl --report-dir /project/results/pipeline/training
+/usr/local/lib/python3.12/site-packages/sklearn/linear_model/_logistic.py:455: OptimizeWarning: Unknown solver options: iprint
+  opt_res = optimize.minimize(
+/usr/local/lib/python3.12/site-packages/sklearn/linear_model/_logistic.py:455: OptimizeWarning: Unknown solver options: iprint
+  opt_res = optimize.minimize(
+/usr/local/lib/python3.12/site-packages/sklearn/linear_model/_logistic.py:455: OptimizeWarning: Unknown solver options: iprint
+  opt_res = optimize.minimize(
+/usr/local/lib/python3.12/site-packages/sklearn/linear_model/_logistic.py:455: OptimizeWarning: Unknown solver options: iprint
+  opt_res = optimize.minimize(
+/usr/local/lib/python3.12/site-packages/sklearn/linear_model/_logistic.py:455: OptimizeWarning: Unknown solver options: iprint
+  opt_res = optimize.minimize(
+/usr/local/lib/python3.12/site-packages/sklearn/linear_model/_logistic.py:455: OptimizeWarning: Unknown solver options: iprint
+  opt_res = optimize.minimize(
+Decisions: 1020  runs: 60
+Label distribution: {'Path_A': 529, 'Path_B': 491}
+
+              model  cv_f1_macro_mean  cv_f1_macro_std  test_accuracy  test_balanced_accuracy  test_f1_macro
+  Majority baseline            0.3087           0.0238         0.5490                  0.5000         0.3544
+Logistic regression            0.9414           0.0076         0.9647                  0.9655         0.9644
+      Decision tree            0.9933           0.0043         1.0000                  1.0000         1.0000
+      Random forest            0.9933           0.0001         1.0000                  1.0000         1.0000
+
+Selected: Random forest  hold-out: {'accuracy': 1.0, 'balanced_accuracy': np.float64(1.0), 'f1_macro': np.float64(1.0)}
+Saved model -> /project/ml/route_selector.pkl
+
+===== EVAL =====
+$ /usr/local/bin/python3 /project/ml/predict_route.py --model /project/ml/route_selector.pkl 40 0 95.0 10.0 Path_A
+{"selected_path": "Path_B"}
+Evaluation: 72 runs on held-out seeds [1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008]
+  [1/72] done results/pipeline/eval/baseline/low_seed1001
+  [2/72] done results/pipeline/eval/baseline/low_seed1002
+  [3/72] done results/pipeline/eval/baseline/low_seed1003
+  [4/72] done results/pipeline/eval/adaptive_rule/low_seed1004
+  [5/72] done results/pipeline/eval/adaptive_rule/low_seed1001
+  [6/72] done results/pipeline/eval/baseline/low_seed1004
+  [7/72] done results/pipeline/eval/adaptive_rule/low_seed1003
+  [8/72] done results/pipeline/eval/adaptive_rule/low_seed1002
+  [9/72] done results/pipeline/eval/baseline/low_seed1005
+  [10/72] done results/pipeline/eval/baseline/low_seed1006
+  [11/72] done results/pipeline/eval/adaptive_rule/low_seed1006
+  [12/72] done results/pipeline/eval/baseline/low_seed1007
+  [13/72] done results/pipeline/eval/adaptive_rule/low_seed1005
+  [14/72] done results/pipeline/eval/adaptive_rule/low_seed1007
+  [15/72] done results/pipeline/eval/baseline/low_seed1008
+  [16/72] done results/pipeline/eval/adaptive_rule/low_seed1008
+  [17/72] done results/pipeline/eval/baseline/medium_seed1001
+  [18/72] done results/pipeline/eval/adaptive_rule/medium_seed1001
+  [19/72] done results/pipeline/eval/baseline/medium_seed1002
+  [20/72] done results/pipeline/eval/adaptive_rule/medium_seed1002
+  [21/72] done results/pipeline/eval/baseline/medium_seed1003
+  [22/72] done results/pipeline/eval/adaptive_rule/medium_seed1003
+  [23/72] done results/pipeline/eval/adaptive_ml/low_seed1003
+  [24/72] done results/pipeline/eval/adaptive_ml/low_seed1002
+  [25/72] done results/pipeline/eval/adaptive_ml/low_seed1001
+  [26/72] done results/pipeline/eval/adaptive_ml/low_seed1004
+  [27/72] done results/pipeline/eval/baseline/medium_seed1004
+  [28/72] done results/pipeline/eval/adaptive_rule/medium_seed1004
+  [29/72] done results/pipeline/eval/adaptive_ml/low_seed1006
+  [30/72] done results/pipeline/eval/adaptive_ml/low_seed1005
+  [31/72] done results/pipeline/eval/baseline/medium_seed1005
+  [32/72] done results/pipeline/eval/adaptive_rule/medium_seed1005
+  [33/72] done results/pipeline/eval/adaptive_ml/low_seed1008
+  [34/72] done results/pipeline/eval/baseline/medium_seed1006
+  [35/72] done results/pipeline/eval/adaptive_ml/low_seed1007
+  [36/72] done results/pipeline/eval/adaptive_rule/medium_seed1006
+  [37/72] done results/pipeline/eval/baseline/medium_seed1007
+  [38/72] done results/pipeline/eval/adaptive_rule/medium_seed1007
+  [39/72] done results/pipeline/eval/baseline/medium_seed1008
+  [40/72] done results/pipeline/eval/adaptive_rule/medium_seed1008
+  [41/72] done results/pipeline/eval/adaptive_ml/medium_seed1001
+  [42/72] done results/pipeline/eval/baseline/high_seed1001
+  [43/72] done results/pipeline/eval/adaptive_ml/medium_seed1002
+  [44/72] done results/pipeline/eval/adaptive_rule/high_seed1001
+  [45/72] done results/pipeline/eval/baseline/high_seed1002
+  [46/72] done results/pipeline/eval/adaptive_rule/high_seed1002
+  [47/72] done results/pipeline/eval/baseline/high_seed1003
+  [48/72] done results/pipeline/eval/adaptive_rule/high_seed1003
+  [49/72] done results/pipeline/eval/adaptive_ml/medium_seed1003
+  [50/72] done results/pipeline/eval/baseline/high_seed1004
+  [51/72] done results/pipeline/eval/adaptive_rule/high_seed1004
+  [52/72] done results/pipeline/eval/adaptive_ml/medium_seed1004
+  [53/72] done results/pipeline/eval/adaptive_ml/medium_seed1005
+  [54/72] done results/pipeline/eval/baseline/high_seed1005
+  [55/72] done results/pipeline/eval/adaptive_rule/high_seed1005
+  [56/72] done results/pipeline/eval/baseline/high_seed1006
+  [57/72] done results/pipeline/eval/adaptive_ml/medium_seed1006
+  [58/72] done results/pipeline/eval/adaptive_rule/high_seed1006
+  [59/72] done results/pipeline/eval/adaptive_ml/medium_seed1008
+  [60/72] done results/pipeline/eval/adaptive_ml/medium_seed1007
+  [61/72] done results/pipeline/eval/baseline/high_seed1007
+  [62/72] done results/pipeline/eval/adaptive_rule/high_seed1007
+  [63/72] done results/pipeline/eval/baseline/high_seed1008
+  [64/72] done results/pipeline/eval/adaptive_ml/high_seed1001
+  [65/72] done results/pipeline/eval/adaptive_rule/high_seed1008
+  [66/72] done results/pipeline/eval/adaptive_ml/high_seed1002
+  [67/72] done results/pipeline/eval/adaptive_ml/high_seed1003
+  [68/72] done results/pipeline/eval/adaptive_ml/high_seed1004
+  [69/72] done results/pipeline/eval/adaptive_ml/high_seed1005
+  [70/72] done results/pipeline/eval/adaptive_ml/high_seed1006
+  [71/72] done results/pipeline/eval/adaptive_ml/high_seed1007
+  [72/72] done results/pipeline/eval/adaptive_ml/high_seed1008
+
+===== REPORT =====
+$ /usr/local/bin/python3 /project/ml/evaluate.py --runs /project/results/pipeline/eval --out /project/results/pipeline/evaluation
+# Evaluation: baseline vs adaptive routing
+
+Runs per mode: {'adaptive_ml': 24, 'adaptive_rule': 24, 'baseline': 24}
+
+## UDP H1->H10 throughput (Mbps, higher=better)
+
+```
+mode           baseline  adaptive_rule  adaptive_ml
+traffic_level                                      
+low               2.611          2.634        2.634
+medium            6.223          8.482        8.482
+high              6.855          9.675        9.675
+```
+
+## UDP H1->H10 packet loss (%, lower=better)
+
+```
+mode           baseline  adaptive_rule  adaptive_ml
+traffic_level                                      
+low               1.030          0.364        0.364
+medium           36.534         13.999       13.999
+high             58.027         43.202       43.202
+```
+
+## UDP H1->H10 mean delay (ms, lower=better)
+
+```
+mode           baseline  adaptive_rule  adaptive_ml
+traffic_level                                      
+low              83.325         60.506       60.506
+medium         1510.143        912.600      912.600
+high           4734.196       3158.208     3158.208
+```
+
+## UDP H1->H10 jitter (ms, lower=better)
+
+```
+mode           baseline  adaptive_rule  adaptive_ml
+traffic_level                                      
+low               0.374          3.170        3.170
+medium            1.277        369.632      369.632
+high              1.259       1229.861     1229.861
+```
+
+## TCP H2->H9 throughput (Mbps, higher=better)
+
+```
+mode           baseline  adaptive_rule  adaptive_ml
+traffic_level                                      
+low               2.586          2.586        2.586
+medium            4.925          4.925        4.925
+high              4.925          4.925        4.925
+```
+
+## Cross-traffic loss (%, lower=better)
+
+```
+mode           baseline  adaptive_rule  adaptive_ml
+traffic_level                                      
+low               4.498          1.866        1.866
+medium           12.023         10.700       10.700
+high             13.187         19.091       19.091
+```
+
+## All flows: packets delivered (%, higher=better)
+
+```
+mode           baseline  adaptive_rule  adaptive_ml
+traffic_level                                      
+low              97.661         99.014       99.014
+medium           85.268         92.520       92.520
+high             69.720         75.266       75.266
+```
+
+ML decisions: 408, fallbacks to rule: 0
+
+
+Saved plot -> /project/results/pipeline/evaluation/comparison.png
+
+Pipeline finished. Results in results/pipeline
+EXIT=0

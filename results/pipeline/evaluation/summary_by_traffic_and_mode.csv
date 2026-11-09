@@ -1,0 +1,10 @@
+traffic_level,mode,udp_throughput_mbps_mean,udp_throughput_mbps_std,udp_loss_pct_mean,udp_loss_pct_std,udp_delay_ms_mean,udp_delay_ms_std,udp_jitter_ms_mean,udp_jitter_ms_std,tcp_throughput_mbps_mean,tcp_throughput_mbps_std,cross_loss_pct_mean,cross_loss_pct_std,network_delivery_pct_mean,network_delivery_pct_std,route_switches_mean,route_switches_std,fallback_decisions_mean,fallback_decisions_std
+low,baseline,2.611,0.23,1.03,0.383,83.325,14.012,0.374,0.09,2.586,0.0,4.498,3.127,97.661,1.591,,,,
+low,adaptive_rule,2.634,0.24,0.364,0.216,60.506,10.89,3.17,1.481,2.586,0.0,1.866,1.012,99.014,0.581,5.875,1.356,0.0,0.0
+low,adaptive_ml,2.634,0.24,0.364,0.216,60.506,10.89,3.17,1.481,2.586,0.0,1.866,1.012,99.014,0.581,5.875,1.356,0.0,0.0
+medium,baseline,6.223,0.583,36.534,8.486,1510.143,577.08,1.277,0.127,4.925,0.0,12.023,6.861,85.268,4.537,,,,
+medium,adaptive_rule,8.482,0.458,13.999,3.372,912.6,107.318,369.632,105.963,4.925,0.0,10.7,3.902,92.52,2.391,6.875,0.991,0.0,0.0
+medium,adaptive_ml,8.482,0.458,13.999,3.372,912.6,107.318,369.632,105.963,4.925,0.0,10.7,3.902,92.52,2.391,6.875,0.991,0.0,0.0
+high,baseline,6.855,0.478,58.027,5.533,4734.196,580.338,1.259,0.093,4.925,0.0,13.187,6.388,69.72,4.214,,,,
+high,adaptive_rule,9.675,0.088,43.202,5.04,3158.208,430.895,1229.861,288.155,4.925,0.0,19.091,7.076,75.266,4.442,5.625,1.302,0.0,0.0
+high,adaptive_ml,9.675,0.088,43.202,5.04,3158.208,430.895,1229.861,288.155,4.925,0.0,19.091,7.076,75.266,4.442,5.625,1.302,0.0,0.0

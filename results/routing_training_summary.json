@@ -1,0 +1,15 @@
+{
+  "original_rows": 110,
+  "exact_duplicates_removed": 0,
+  "invalid_rows_removed": 0,
+  "clean_rows": 110,
+  "simulation_runs": 22,
+  "train_rows": 80,
+  "test_rows": 30,
+  "train_runs": 16,
+  "test_runs": 6,
+  "run_overlap": 0,
+  "selected_candidate": "Random Forest - basic",
+  "candidate_model": "C:\\CN\\AI-Adaptive-Routing\\ml\\route_selector_cleaned_candidate.pkl",
+  "metrics_file": "C:\\CN\\AI-Adaptive-Routing\\results\\routing_model_comparison.csv"
+}

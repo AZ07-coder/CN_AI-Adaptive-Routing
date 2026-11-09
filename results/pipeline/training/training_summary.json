@@ -1,0 +1,28 @@
+{
+  "decisions": 1020,
+  "runs": 60,
+  "train_runs": 45,
+  "test_runs": 15,
+  "label_distribution": {
+    "Path_A": 529,
+    "Path_B": 491
+  },
+  "selected_model": "Random forest",
+  "holdout_metrics_of_selected": {
+    "accuracy": 1.0,
+    "balanced_accuracy": 1.0,
+    "f1_macro": 1.0
+  },
+  "model_file": "/project/ml/route_selector.pkl",
+  "features": [
+    "queue_A",
+    "queue_B",
+    "util_A",
+    "util_B",
+    "queue_diff",
+    "util_diff",
+    "on_path_A",
+    "on_path_B"
+  ],
+  "note": "Labels come from the hysteresis queue rule, so these scores measure how well the model imitates that rule, not routing optimality. Routing quality is measured separately in the evaluation stage."
+}

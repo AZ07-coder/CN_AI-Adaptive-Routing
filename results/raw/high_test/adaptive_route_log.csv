@@ -1,0 +1,6 @@
+time,queue_A,queue_B,selected_path
+10,100,0,Path_B
+12,200,200,Path_A
+14,200,200,Path_A
+16,200,100,Path_B
+18,200,200,Path_A
